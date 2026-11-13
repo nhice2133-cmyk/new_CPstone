@@ -159,7 +159,7 @@ class SmartEntryInstallerGUI:
         # State Variables
         self.var_install_dir = tk.StringVar(value=self.install_dir)
         self.var_force_reinstall = tk.BooleanVar(value=False)
-        self.var_reinstall_files = tk.BooleanVar(value=False)
+        self.var_reinstall_files = tk.BooleanVar(value=True)
         self.var_create_webapp_shortcut = tk.BooleanVar(value=True)
         self.var_create_kiosk_shortcut = tk.BooleanVar(value=False)
         self.var_create_backup_shortcut = tk.BooleanVar(value=False)
@@ -530,10 +530,10 @@ class SmartEntryInstallerGUI:
         if self.is_installed_at_target:
             chk_update = tk.Checkbutton(
                 opt_frame,
-                text=f"Re-copy / update project files in {self.var_install_dir.get()}",
+                text=f"Update / copy latest project files to {self.var_install_dir.get()} (Recommended)",
                 variable=self.var_reinstall_files,
-                font=("Segoe UI", 8),
-                fg=TEXT_MUTED,
+                font=("Segoe UI", 8, "bold"),
+                fg=ACCENT_GREEN,
                 bg=BG_MAIN,
                 activebackground=BG_MAIN,
                 activeforeground=TEXT_WHITE,
@@ -565,12 +565,12 @@ class SmartEntryInstallerGUI:
         reinstall_files = self.var_reinstall_files.get()
 
         self.btn_webapp.pack_forget()
-        if is_installed and self.all_deps_installed and not force_pip and not reinstall_files:
+        if is_installed and not reinstall_files and not force_pip:
             self.btn_next.config(text="Launch SMART ENTRY Web App >", bg="#15803d")
-        elif not is_installed:
-            self.btn_next.config(text=f"Install to {target_dir} >", bg=CSU_GREEN)
+        elif is_installed:
+            self.btn_next.config(text=f"Update Files in {target_dir} >", bg=CSU_GREEN)
         else:
-            self.btn_next.config(text="Update & Setup SMART ENTRY >", bg=CSU_GREEN)
+            self.btn_next.config(text=f"Install to {target_dir} >", bg=CSU_GREEN)
 
     def _browse_install_folder(self):
         selected = filedialog.askdirectory(initialdir=self.var_install_dir.get(), title="Select Target Installation Directory")
@@ -714,8 +714,26 @@ class SmartEntryInstallerGUI:
             self.var_install_dir.set(target)
             os.makedirs(target, exist_ok=True)
 
-        # Check candidate sources: bundled _MEIPASS or source directory
+        # Terminate any running server on port 5000 so file handles are unlocked for updating
+        try:
+            if sys.platform == "win32":
+                out = subprocess.check_output("netstat -ano", shell=True, text=True, creationflags=0x08000000)
+                pids = set()
+                for line in out.splitlines():
+                    if ":5000" in line and "LISTENING" in line:
+                        parts = line.strip().split()
+                        if parts:
+                            pids.add(parts[-1])
+                for pid in pids:
+                    subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, creationflags=0x08000000)
+        except Exception:
+            pass
+
+        # Check candidate sources: prefer source repo if available and distinct, then bundled _MEIPASS
         source_candidates = []
+        if hasattr(self, "source_dir") and os.path.exists(self.source_dir):
+            if os.path.normpath(self.source_dir).lower() != os.path.normpath(target).lower():
+                source_candidates.append(self.source_dir)
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             source_candidates.append(sys._MEIPASS)
         if hasattr(self, "source_dir") and os.path.exists(self.source_dir):
@@ -727,7 +745,7 @@ class SmartEntryInstallerGUI:
         root_files = [
             "app.py", "config.py", "requirements.txt", "README.md",
             "NEW_PC_SETUP_GUIDE.txt", "smart_entry_launcher.bat", "smart_entry_backup.bat",
-            "decrypt_files.bat", "tray_app.py", "reset_admin.py"
+            "decrypt_files.bat", "tray_app.py", "reset_admin.py", "setup.bat"
         ]
 
         # Ignore patterns
