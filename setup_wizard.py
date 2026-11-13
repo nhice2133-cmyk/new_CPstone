@@ -160,6 +160,7 @@ class SmartEntryInstallerGUI:
         self.var_install_dir = tk.StringVar(value=self.install_dir)
         self.var_force_reinstall = tk.BooleanVar(value=False)
         self.var_reinstall_files = tk.BooleanVar(value=True)
+        self.var_reset_patrons = tk.BooleanVar(value=True)
         self.var_create_webapp_shortcut = tk.BooleanVar(value=True)
         self.var_create_kiosk_shortcut = tk.BooleanVar(value=False)
         self.var_create_backup_shortcut = tk.BooleanVar(value=False)
@@ -528,6 +529,19 @@ class SmartEntryInstallerGUI:
         chk_kiosk_sc.pack(anchor="w")
 
         if self.is_installed_at_target:
+            chk_reset = tk.Checkbutton(
+                opt_frame,
+                text="Clean / Factory Reset: Start with 0 registered patrons (purges old test data)",
+                variable=self.var_reset_patrons,
+                font=("Segoe UI", 8, "bold"),
+                fg=CSU_GOLD,
+                bg=BG_MAIN,
+                activebackground=BG_MAIN,
+                activeforeground=TEXT_WHITE,
+                selectcolor=CARD_BG,
+            )
+            chk_reset.pack(anchor="w")
+
             chk_update = tk.Checkbutton(
                 opt_frame,
                 text=f"Update / copy latest project files to {self.var_install_dir.get()} (Recommended)",
@@ -739,6 +753,42 @@ class SmartEntryInstallerGUI:
         if hasattr(self, "source_dir") and os.path.exists(self.source_dir):
             source_candidates.append(self.source_dir)
 
+        # If clean factory reset requested, purge old patron faces, embeddings, and database
+        if self.var_reset_patrons.get():
+            self._append_log(">>> Factory Reset: purging old registered patrons from target...")
+            target_face_data = os.path.join(target, "face_data")
+            if os.path.exists(target_face_data):
+                for item in os.listdir(target_face_data):
+                    item_p = os.path.join(target_face_data, item)
+                    if os.path.isdir(item_p) and item != "staging":
+                        try:
+                            shutil.rmtree(item_p)
+                        except Exception:
+                            pass
+            # Remove old embeddings in target
+            target_npz = os.path.join(target, "recognition", "models", "sface_embeddings.npz")
+            if os.path.exists(target_npz):
+                try:
+                    os.remove(target_npz)
+                except Exception:
+                    pass
+            # Remove old database in target so clean one is copied/initialized
+            target_db = os.path.join(target, "database", "smart_entry.db")
+            if os.path.exists(target_db):
+                try:
+                    os.remove(target_db)
+                except Exception:
+                    pass
+            # Remove old alert snapshots
+            target_snaps = os.path.join(target, "static", "snapshots")
+            if os.path.exists(target_snaps):
+                for snap in os.listdir(target_snaps):
+                    if snap != ".gitkeep":
+                        try:
+                            os.remove(os.path.join(target_snaps, snap))
+                        except Exception:
+                            pass
+
         # Subdirectories to copy
         subdirs = ["database", "recognition", "routes", "static", "templates", "tools", "logo", "face_data", "backups"]
         # Root files to copy
@@ -798,17 +848,19 @@ class SmartEntryInstallerGUI:
                     src_f = os.path.join(root, f)
                     dst_f = os.path.join(target_sub, f)
 
-                    # CRITICAL: Preserve existing database if target already has one!
+                    # Preserve existing database only if user unchecked factory reset
                     if f.lower() == "smart_entry.db" and os.path.exists(dst_f):
-                        continue
+                        if not self.var_reset_patrons.get():
+                            continue
 
                     # Preserve existing backups if already in target
                     if dname == "backups" and os.path.exists(dst_f):
                         continue
 
-                    # Preserve existing patron faces
+                    # Preserve existing patron faces only if user unchecked factory reset
                     if dname == "face_data" and os.path.exists(dst_f):
-                        continue
+                        if not self.var_reset_patrons.get():
+                            continue
 
                     shutil.copy2(src_f, dst_f)
                     copied_count += 1
@@ -971,11 +1023,14 @@ class SmartEntryInstallerGUI:
                 "import sys, os\n"
                 f"sys.path.insert(0, r'{target_dir}')\n"
                 "from database.database import init_db\n"
+                "from app import create_app, _seed_default_admin\n"
                 "init_db()\n"
+                "app = create_app()\n"
+                "_seed_default_admin(app)\n"
                 "print('DB_READY')\n"
             )
             subprocess.run([py_bin, "-c", db_script], check=True, cwd=target_dir, capture_output=True)
-            self._append_log(f"    [OK] SQLite database schema initialized ({os.path.join(target_dir, 'database', 'smart_entry.db')}).")
+            self._append_log(f"    [OK] SQLite database initialized ({os.path.join(target_dir, 'database', 'smart_entry.db')}).")
 
             # Step 5: Create Windows Desktop shortcuts
             self._set_status("Step 5 of 5: Creating Windows Desktop shortcuts...", 90)
